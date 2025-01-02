@@ -1,43 +1,63 @@
-import {NextAuthConfig} from "next-auth"
-import CredentialProvider from 'next-auth/providers/credentials';
-import GithubProvider from 'next-auth/providers/github';
+import CredentialsProvider from 'next-auth/providers/credentials';
+import connectMongoDB from '@/lib/mongodb';
+import User from '@/models/user';
+import bcrypt from 'bcrypt';
 
 const authConfig = {
   providers: [
-    GithubProvider({
-      clientId: process.env.GITHUB_ID ?? '',
-      clientSecret: process.env.GITHUB_SECRET ?? ''
-    }),
-    CredentialProvider({
+    CredentialsProvider({
+      name: 'Credentials',
       credentials: {
-        email: {
-          type: 'email'
-        },
-        password: {
-          type: 'password'
-        }
+        email: { label: 'Email', type: 'text' },
+        password: { label: 'Password', type: 'password' },
       },
-      async authorize(credentials, req) {
-        const user = {
-          id: '1',
-          name: 'John',
-          email: credentials?.email as string
-        };
-        if (user) {
-          // Any object returned will be saved in `user` property of the JWT
-          return user;
-        } else {
-          // If you return null then an error will be displayed advising the user to check their details.
-          return null;
-
-          // You can also Reject this callback with an Error thus the user will be sent to the error page with the error message as a query parameter
+      async authorize(credentials) {
+        if (!credentials || typeof credentials.email !== 'string' || typeof credentials.password !== 'string') {
+          throw new Error('Invalid credentials provided.');
         }
-      }
-    })
+
+        const { email, password } = credentials;
+
+        await connectMongoDB();
+
+        const user = await User.findOne({ email });
+        if (!user) {
+          throw new Error('Invalid email or password.');
+        }
+
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
+          throw new Error('Invalid email or password.');
+        }
+
+        return {
+          id: user._id.toString(),
+          email: user.email,
+          name: user.username,
+        };
+      },
+    }),
   ],
-  pages: {
-    signIn: '/' //sigin page
-  }
-} satisfies NextAuthConfig;
+  session: {
+    strategy: 'jwt',
+  },
+  callbacks: {
+    async jwt({ token, user }: { token: any; user?: any }) {
+      if (user) {
+        token.id = user.id;
+        token.email = user.email;
+      }
+      return token;
+    },
+    async session({ session, token }: { session: any; token: any }) {
+      if (token) {
+        session.user.id = token.id;
+        session.user.email = token.email;
+      }
+      return session;
+    },
+  },
+  secret: process.env.AUTH_SECRET,
+};
 
 export default authConfig;
